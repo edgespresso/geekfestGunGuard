@@ -1,175 +1,143 @@
 #include <sourcemod>
+#include <cstrike>
 
-ArrayList g_RestrictedPlayers;
-ArrayList g_PlayerTiers;
+// Version 0.5
+// Author: Edgespresso
 
-typedef struct {
-    char steamID[32];
-    char weapon[32];
-} RestrictedInfo;
+new Handle:g_RestrictedPlayers;
 
-typedef struct {
-    char steamID[32];
-    char tier[32];
-} PlayerTier;
-
-char g_TierWeapons[4][128][32];
-int g_TierWeaponCount[4];
-
-enum Tier {
-    MASTER,
-    GOLD,
-    SILVER,
-    BRONZE,
-    TIER_COUNT
-};
-
+/**
+ * Initialization function.
+ */
 public void OnPluginStart() {
-    g_RestrictedPlayers = new ArrayList(sizeof(RestrictedInfo));
-    g_PlayerTiers = new ArrayList(sizeof(PlayerTier));
+    g_RestrictedPlayers = CreateArray(32);
 
-    LoadTierWeapons("master");
-    LoadTierWeapons("gold");
-    LoadTierWeapons("silver");
-    LoadTierWeapons("bronze");
-
+    // Register admin commands
     RegAdminCmd("sm_restrict", Cmd_RestrictWeapon, ADMFLAG_GENERIC, "Restrict a weapon for a player");
     RegAdminCmd("sm_unrestrictall", Cmd_UnrestrictAll, ADMFLAG_GENERIC, "Remove all weapon restrictions");
-    RegAdminCmd("sm_restrict_tier", Cmd_RestrictTier, ADMFLAG_GENERIC, "Restrict all players in a specific tier");
-    RegAdminCmd("sm_settier", Cmd_SetTier, ADMFLAG_GENERIC, "Set the tier for a player");
+    RegAdminCmd("sm_restrictlist", Cmd_ListRestrictions, ADMFLAG_GENERIC, "List all weapon restrictions");
 }
 
-public Action Cmd_RestrictWeapon(int client, int args) {
-    if (args < 2) {
-        ReplyToCommand(client, "Usage: sm_restrict <weapon> <steamID>");
-        return Plugin_Handled;
-    }
-
-    RestrictedInfo info;
-    GetCmdArg(0, info.weapon, sizeof(info.weapon));
-    GetCmdArg(1, info.steamID, sizeof(info.steamID));
-
-    g_RestrictedPlayers.Push(info);
-    ReplyToCommand(client, "Restricted weapon %s for SteamID: %s", info.weapon, info.steamID);
-
-    return Plugin_Handled;
-}
-
+/**
+ * Command function to unrestrict all weapons.
+ */
 public Action Cmd_UnrestrictAll(int client, int args) {
-    g_RestrictedPlayers.Clear();
+    while (GetArraySize(g_RestrictedPlayers) > 0) {
+        RemoveFromArray(g_RestrictedPlayers, 0);
+    }
     ReplyToCommand(client, "All weapon restrictions removed!");
     return Plugin_Handled;
 }
 
-public Action Cmd_RestrictTier(int client, int args) {
-    if (args < 1) {
-        ReplyToCommand(client, "Usage: sm_restrict_tier <tier_name>");
-        return Plugin_Handled;
-    }
-
-    char tierName[32];
-    GetCmdArg(0, tierName, sizeof(tierName));
-    int tierIndex = GetTierIndexByName(tierName);
-    if (tierIndex == -1) {
-        ReplyToCommand(client, "Unknown tier: %s", tierName);
-        return Plugin_Handled;
-    }
-
-    for (int i = 0; i < g_PlayerTiers.Length; i++) {
-        PlayerTier playerTier;
-        g_PlayerTiers.GetArray(i, playerTier);
-        if (StrEqual(playerTier.tier, tierName)) {
-            for (int j = 0; j < g_TierWeaponCount[tierIndex]; j++) {
-                RestrictedInfo info;
-                strcopy(info.steamID, sizeof(info.steamID), playerTier.steamID);
-                strcopy(info.weapon, sizeof(info.weapon), g_TierWeapons[tierIndex][j]);
-                g_RestrictedPlayers.Push(info);
-            }
-        }
-    }
-
-    ReplyToCommand(client, "All players in tier %s have been restricted!", tierName);
-    return Plugin_Handled;
-}
-
-public Action Cmd_SetTier(int client, int args) {
-    if (args < 2) {
-        ReplyToCommand(client, "Usage: sm_settier <steamID> <tier_name>");
-        return Plugin_Handled;
-    }
-
-    char sSteamID[32], sTier[32];
-    GetCmdArg(0, sSteamID, sizeof(sSteamID));
-    GetCmdArg(1, sTier, sizeof(sTier));
-
-    if (GetTierIndexByName(sTier) == -1) {
-        ReplyToCommand(client, "Unknown tier: %s. Available tiers: master, gold, silver, bronze.", sTier);
-        return Plugin_Handled;
-    }
-
-    int playerTierIndex = FindPlayerTierIndex(sSteamID);
-    if (playerTierIndex != -1) {
-        PlayerTier playerTier;
-        g_PlayerTiers.GetArray(playerTierIndex, playerTier);
-        strcopy(playerTier.tier, sizeof(playerTier.tier), sTier);
-        g_PlayerTiers.SetArray(playerTierIndex, playerTier);
-    } else {
-        PlayerTier newTier;
-        strcopy(newTier.steamID, sizeof(newTier.steamID), sSteamID);
-        strcopy(newTier.tier, sizeof(newTier.tier), sTier);
-        g_PlayerTiers.Push(newTier);
-    }
-
-    ReplyToCommand(client, "Set tier %s for SteamID: %s", sTier, sSteamID);
-    return Plugin_Handled;
-}
-
-public int GetTierIndexByName(const char[] tierName) {
-    if (StrEqual(tierName, "master")) return MASTER;
-    if (StrEqual(tierName, "gold")) return GOLD;
-    if (StrEqual(tierName, "silver")) return SILVER;
-    if (StrEqual(tierName, "bronze")) return BRONZE;
-    return -1;
-}
-
-public int FindPlayerTierIndex(const char[] steamID) {
-    for (int i = 0; i < g_PlayerTiers.Length; i++) {
-        PlayerTier playerTier;
-        g_PlayerTiers.GetArray(i, playerTier);
-        if (StrEqual(playerTier.steamID, steamID)) {
+/**
+ * Utility function to get the client index from a SteamID.
+ */
+public int GetClientOfSteamID(const char[] steamID) {
+    for (int i = 1; i <= MaxClients; i++) {
+        char checkSteamID[32];
+        GetClientAuthId(i, AuthId_Steam3, checkSteamID, sizeof(checkSteamID));
+        if (StrEqual(steamID, checkSteamID)) {
             return i;
         }
     }
-    return -1;
+    return 0;
 }
 
-public void LoadTierWeapons(const char[] tierName) {
-    char path[128];
-    Format(path, sizeof(path), "configs/tier_%s.cfg", tierName);
+/**
+ * Utility function to extract the weapon name from the restriction string.
+ */
+public void ExtractWeaponFromRestriction(const char[] sRestricted, char[] sWeapon) {
+    int delimiterPos = StrContains(sRestricted, "_");
+    if (delimiterPos != -1) {
+        int k = 0;
+        for (int j = delimiterPos + 1; j < strlen(sRestricted) && sRestricted[j] != '\0'; j++, k++) {
+            sWeapon[k] = sRestricted[j];
+        }
+        sWeapon[k] = '\0';
+    }
+}
 
-    File file = OpenFile(path, "r");
-    if (file == null) {
-        LogError("Failed to load tier weapons from: %s", path);
-        return;
+/**
+ * Utility function to extract the SteamID from the restriction string.
+ */
+public void ExtractSteamIDFromRestriction(const char[] sRestricted, char[] sSteamID) {
+    int delimiterPos = StrContains(sRestricted, "_");
+    if (delimiterPos != -1) {
+        for (int j = 0; j < delimiterPos && j < strlen(sRestricted); j++) {
+            sSteamID[j] = sRestricted[j];
+        }
+        sSteamID[delimiterPos] = '\0';  // Terminate the string at the delimiter
+    }
+}
+
+/**
+ * Command function to restrict a weapon for players.
+ */
+public Action Cmd_RestrictWeapon(int client, int args) {
+    if (args < 2) {
+        ReplyToCommand(client, "Usage: sm_restrict <weapon> <playerID | T | CT | all>");
+        return Plugin_Handled;
     }
 
-    int tierIndex = GetTierIndexByName(tierName);
-    if (tierIndex == -1) {
-        CloseHandle(file);
-        return;
+    char sWeapon[32], sTarget[32], sRestricted[64];
+    GetCmdArg(1, sWeapon, sizeof(sWeapon));
+    GetCmdArg(2, sTarget, sizeof(sTarget));
+
+    if (StrEqual(sTarget, "T") || StrEqual(sTarget, "CT") || StrEqual(sTarget, "all")) {
+        for (int i = 1; i <= MaxClients; i++) {
+            if (!IsClientInGame(i)) continue;
+
+            char sSteamID[32];
+            GetClientAuthId(i, AuthId_Steam3, sSteamID, sizeof(sSteamID));
+
+            // Skip if the player is a bot
+            if (StrEqual(sSteamID, "BOT")) continue;
+
+            if ((StrEqual(sTarget, "T") && GetClientTeam(i) == 2) || 
+                (StrEqual(sTarget, "CT") && GetClientTeam(i) == 3) || 
+                StrEqual(sTarget, "all")) {
+
+                Format(sRestricted, sizeof(sRestricted), "%s_%s", sSteamID, sWeapon);
+                PushArrayString(g_RestrictedPlayers, sRestricted);
+            }
+        }
+    } else {
+        // Restrict for a specific player's SteamID
+        Format(sRestricted, sizeof(sRestricted), "%s_%s", sTarget, sWeapon);
+        PushArrayString(g_RestrictedPlayers, sRestricted);
     }
 
-    char line[32];
-    int count = 0;
-    while (!file.EndOfFileReached() && count < 128) {
-        file.ReadLine(line, sizeof(line));
-        TrimString(line);
-        if (strlen(line) > 0) {
-            strcopy(g_TierWeapons[tierIndex][count], sizeof(g_TierWeapons[tierIndex][count]), line);
-            count++;
+    return Plugin_Handled;
+}
+
+/**
+ * Command function to list the weapon restrictions.
+ */
+public Action Cmd_ListRestrictions(int client, int args) {
+    int arraySize = GetArraySize(g_RestrictedPlayers);
+    
+    if (arraySize == 0) {
+        ReplyToCommand(client, "No weapon restrictions set.");
+        return Plugin_Handled;
+    }
+
+    for (int i = 0; i < arraySize; i++) {
+        char sRestricted[64];
+        GetArrayString(g_RestrictedPlayers, i, sRestricted, sizeof(sRestricted));
+        
+        char sWeapon[32], sSteamID[32];
+        ExtractSteamIDFromRestriction(sRestricted, sSteamID);
+        ExtractWeaponFromRestriction(sRestricted, sWeapon);
+
+        if (sSteamID[0] == 'B' && sSteamID[1] == 'O' && sSteamID[2] == 'T') continue;  // Skip bots
+
+        int target = GetClientOfSteamID(sSteamID);
+        if (target > 0) {
+            char playerName[64];
+            GetClientName(target, playerName, sizeof(playerName));
+            ReplyToCommand(client, "%s %s", sWeapon, playerName);
         }
     }
 
-    g_TierWeaponCount[tierIndex] = count;
-    CloseHandle(file);
+    return Plugin_Handled;
 }
